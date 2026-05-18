@@ -9,9 +9,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: supabase/setup-cli@feat/caching
+      - uses: supabase/setup-cli@fix-v299-latest-archive
         with:
-          cache: true
+          version: latest
 
       - run: supabase start
       - run: supabase status
