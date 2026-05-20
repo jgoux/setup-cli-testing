@@ -4,45 +4,50 @@ on:
   workflow_dispatch:
 
 jobs:
-  host:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
-        version:
-          - 2.100.1
-          - latest
-    steps:
-      - uses: supabase/setup-cli@codex/v1-musl-apk
-        with:
-          version: ${{ matrix.version }}
-          github-token: ${{ github.token }}
-
-      - run: supabase --version
-      - run: supabase --help
-
-  alpine:
+  v2-plain-alpine:
     runs-on: ubuntu-latest
     container:
-      image: node:20-alpine
+      image: alpine:3.20
     strategy:
       fail-fast: false
       matrix:
         version:
+          - 2.100.0
           - 2.100.1
           - latest
     defaults:
       run:
         shell: sh
     steps:
-      - uses: supabase/setup-cli@codex/v1-musl-apk
+      - uses: supabase/setup-cli@codex/alpine-runtime-deps
         with:
           version: ${{ matrix.version }}
           github-token: ${{ github.token }}
 
+      - run: apk info -e libstdc++ libgcc
+      - run: supabase --version
+      - run: supabase --help
+
+  v1-plain-alpine:
+    runs-on: ubuntu-latest
+    container:
+      image: alpine:3.20
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - 2.100.0
+          - 2.100.1
+          - latest
+    defaults:
+      run:
+        shell: sh
+    steps:
+      - uses: supabase/setup-cli@codex/v1-alpine-runtime-deps
+        with:
+          version: ${{ matrix.version }}
+          github-token: ${{ github.token }}
+
+      - run: apk info -e libstdc++ libgcc
       - run: supabase --version
       - run: supabase --help
