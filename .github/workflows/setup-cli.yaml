@@ -4,6 +4,26 @@ on:
   workflow_dispatch:
 
 jobs:
+  host:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+        version:
+          - 2.100.1
+          - latest
+    steps:
+      - uses: supabase/setup-cli@codex/use-apk-on-musl
+        with:
+          version: ${{ matrix.version }}
+
+      - run: supabase --version
+      - run: supabase --help
+
   alpine:
     runs-on: ubuntu-latest
     container:
