@@ -1,18 +1,26 @@
-name: test-supabase-cache
+name: test-setup-cli-branch
 
 on:
   workflow_dispatch:
 
 jobs:
-  test:
+  alpine:
     runs-on: ubuntu-latest
+    container:
+      image: node:20-alpine
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - 2.100.1
+          - latest
+    defaults:
+      run:
+        shell: sh
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: supabase/setup-cli@feat/caching
+      - uses: supabase/setup-cli@codex/use-apk-on-musl
         with:
-          cache: true
+          version: ${{ matrix.version }}
 
-      - run: supabase start
-      - run: supabase status
-      - run: supabase stop
+      - run: supabase --version
+      - run: supabase --help
