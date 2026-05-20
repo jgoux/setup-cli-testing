@@ -17,7 +17,7 @@ jobs:
           - 2.100.1
           - latest
     steps:
-      - uses: supabase/setup-cli@codex/use-apk-on-musl
+      - uses: supabase/setup-cli@codex/v1-musl-apk
         with:
           version: ${{ matrix.version }}
 
@@ -38,7 +38,7 @@ jobs:
       run:
         shell: sh
     steps:
-      - uses: supabase/setup-cli@codex/use-apk-on-musl
+      - uses: supabase/setup-cli@codex/v1-musl-apk
         with:
           version: ${{ matrix.version }}
 
