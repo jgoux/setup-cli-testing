@@ -100,6 +100,62 @@ jobs:
           test "${output}" = "2.108.0"
           supabase --help >/dev/null
 
+  legacy-preinstall:
+    name: legacy preinstall
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: setup-cli
+        uses: supabase/setup-cli@julien/cli-1480-source-cli-install-from-npm-registry
+        with:
+          version: 1.15.1
+
+      - name: Verify legacy CLI
+        run: |
+          set -euo pipefail
+
+          installed="$(supabase --version)"
+          output="${{ steps.setup-cli.outputs.version }}"
+
+          echo "installed=${installed}"
+          echo "output=${output}"
+
+          test "${installed}" = "1.15.1"
+          test "${output}" = "1.15.1"
+          supabase --help >/dev/null
+
+  node-preservation:
+    name: preserve caller node
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Capture Node version
+        id: before-node
+        run: echo "version=$(node --version)" >> "$GITHUB_OUTPUT"
+
+      - uses: supabase/setup-cli@julien/cli-1480-source-cli-install-from-npm-registry
+        with:
+          version: 2.33.0
+
+      - name: Verify Node version is preserved
+        run: |
+          set -euo pipefail
+
+          before="${{ steps.before-node.outputs.version }}"
+          after="$(node --version)"
+
+          echo "before=${before}"
+          echo "after=${after}"
+
+          test "${after}" = "${before}"
+          supabase --help >/dev/null
+
   alpine:
     name: alpine / ${{ matrix.version }}
     runs-on: ubuntu-latest
@@ -126,6 +182,7 @@ jobs:
           set -eu
 
           apk info -e libstdc++ libgcc
+          node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)'
 
           installed="$(supabase --version)"
           output="${{ steps.setup-cli.outputs.version }}"
@@ -148,3 +205,24 @@ jobs:
           esac
 
           supabase --help >/dev/null
+
+  alpine-old-node-rejected:
+    name: alpine old node rejected
+    runs-on: ubuntu-latest
+    container:
+      image: alpine:3.18
+    defaults:
+      run:
+        shell: sh
+    steps:
+      - id: setup-cli
+        continue-on-error: true
+        uses: supabase/setup-cli@julien/cli-1480-source-cli-install-from-npm-registry
+        with:
+          version: latest
+
+      - name: Verify old Node package failed clearly
+        run: |
+          set -eu
+
+          test "${{ steps.setup-cli.outcome }}" = "failure"
