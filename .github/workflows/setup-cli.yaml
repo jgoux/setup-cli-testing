@@ -125,6 +125,38 @@ jobs:
           test "${output}" = "1.15.1"
           supabase --help >/dev/null
 
+  workspace-npmrc-layout:
+    name: workspace npmrc layout
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create workspace npm config
+        run: |
+          cat > .npmrc <<'EOF'
+          registry=https://registry.npmjs.org/
+          bin-links=false
+          EOF
+
+      - id: setup-cli
+        uses: supabase/setup-cli@fix/npm-config-musl-runtime
+        with:
+          version: 2.100.0
+
+      - name: Verify CLI
+        run: |
+          set -euo pipefail
+
+          installed="$(supabase --version)"
+          output="${{ steps.setup-cli.outputs.version }}"
+
+          echo "installed=${installed}"
+          echo "output=${output}"
+
+          test "${installed}" = "2.100.0"
+          test "${output}" = "2.100.0"
+          supabase --help >/dev/null
+
   node-preservation:
     name: preserve caller node
     runs-on: ubuntu-latest
@@ -255,10 +287,20 @@ jobs:
         run: |
           set -eu
 
+          apk add --no-cache libstdc++ libgcc nodejs npm
+
           mkdir -p /tmp/bad-bin
           printf '#!/bin/sh\nexit 127\n' > /tmp/bad-bin/node
           printf '#!/bin/sh\nexit 127\n' > /tmp/bad-bin/npm
-          chmod +x /tmp/bad-bin/node /tmp/bad-bin/npm
+          cat > /tmp/bad-bin/apk <<'EOF'
+          #!/bin/sh
+          if [ "$1" = "add" ]; then
+            echo "unexpected apk add" >&2
+            exit 1
+          fi
+          exec /sbin/apk "$@"
+          EOF
+          chmod +x /tmp/bad-bin/node /tmp/bad-bin/npm /tmp/bad-bin/apk
           echo "/tmp/bad-bin" >> "$GITHUB_PATH"
 
       - id: setup-cli
