@@ -1,18 +1,150 @@
-name: test-supabase-cache
+name: test setup-cli npm installer
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  test:
+  explicit-version:
+    name: ${{ matrix.os }} / ${{ matrix.version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+        version:
+          - latest
+          - beta
+          - 1.178.2
+          - 2.33.0
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: setup-cli
+        uses: supabase/setup-cli@julien/cli-1480-source-cli-install-from-npm-registry
+        with:
+          version: ${{ matrix.version }}
+
+      - name: Verify CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          installed="$(supabase --version)"
+          output="${{ steps.setup-cli.outputs.version }}"
+
+          echo "installed=${installed}"
+          echo "output=${output}"
+
+          test "${installed}" = "${output}"
+
+          case "${{ matrix.version }}" in
+            latest)
+              [[ "${installed}" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]
+              ;;
+            beta)
+              [[ "${installed}" == *beta* ]]
+              ;;
+            *)
+              test "${installed}" = "${{ matrix.version }}"
+              ;;
+          esac
+
+          supabase --help >/dev/null
+
+  lockfile-detection:
+    name: package-lock detection
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
-      - uses: supabase/setup-cli@v1
-        with:
-          version: latest
+      - name: Create package-lock fixture
+        run: |
+          cat > package-lock.json <<'JSON'
+          {
+            "name": "setup-cli-testing",
+            "lockfileVersion": 3,
+            "packages": {
+              "": {
+                "dependencies": {
+                  "supabase": "2.108.0"
+                }
+              },
+              "node_modules/supabase": {
+                "version": "2.108.0",
+                "integrity": "sha512-NofgZCCWJTZIVVf3m9mMRr3oVZROeBSTJB4bAmP1MvmhO+jUq7U+HvF1NPqFdvmZA5PKx4vRtpjvg7g6LbeD+w=="
+              }
+            }
+          }
+          JSON
 
-      - run: supabase start
-      - run: supabase status
-      - run: supabase stop
+      - id: setup-cli
+        uses: supabase/setup-cli@julien/cli-1480-source-cli-install-from-npm-registry
+
+      - name: Verify lockfile version
+        run: |
+          set -euo pipefail
+
+          installed="$(supabase --version)"
+          output="${{ steps.setup-cli.outputs.version }}"
+
+          echo "installed=${installed}"
+          echo "output=${output}"
+
+          test "${installed}" = "2.108.0"
+          test "${output}" = "2.108.0"
+          supabase --help >/dev/null
+
+  alpine:
+    name: alpine / ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    container:
+      image: alpine:3.20
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - latest
+          - beta
+          - 2.100.0
+    defaults:
+      run:
+        shell: sh
+    steps:
+      - id: setup-cli
+        uses: supabase/setup-cli@julien/cli-1480-source-cli-install-from-npm-registry
+        with:
+          version: ${{ matrix.version }}
+
+      - name: Verify Alpine runtime
+        run: |
+          set -eu
+
+          apk info -e libstdc++ libgcc
+
+          installed="$(supabase --version)"
+          output="${{ steps.setup-cli.outputs.version }}"
+
+          echo "installed=${installed}"
+          echo "output=${output}"
+
+          test "${installed}" = "${output}"
+
+          case "${{ matrix.version }}" in
+            beta)
+              echo "${installed}" | grep beta
+              ;;
+            latest)
+              echo "${installed}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+'
+              ;;
+            *)
+              test "${installed}" = "${{ matrix.version }}"
+              ;;
+          esac
+
+          supabase --help >/dev/null
