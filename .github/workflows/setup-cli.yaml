@@ -242,6 +242,47 @@ jobs:
           test "${output}" = "2.100.0"
           supabase --help >/dev/null
 
+  alpine-shadowed-node:
+    name: alpine shadowed node
+    runs-on: ubuntu-latest
+    container:
+      image: alpine:3.20
+    defaults:
+      run:
+        shell: sh
+    steps:
+      - name: Shadow Node runtime
+        run: |
+          set -eu
+
+          mkdir -p /tmp/bad-bin
+          printf '#!/bin/sh\nexit 127\n' > /tmp/bad-bin/node
+          printf '#!/bin/sh\nexit 127\n' > /tmp/bad-bin/npm
+          chmod +x /tmp/bad-bin/node /tmp/bad-bin/npm
+          echo "/tmp/bad-bin" >> "$GITHUB_PATH"
+
+      - id: setup-cli
+        uses: supabase/setup-cli@fix/npm-config-musl-runtime
+        with:
+          version: 2.100.0
+
+      - name: Verify Alpine runtime won PATH
+        run: |
+          set -eu
+
+          test "$(command -v node)" = "/usr/bin/node"
+          test "$(command -v npm)" = "/usr/bin/npm"
+
+          installed="$(supabase --version)"
+          output="${{ steps.setup-cli.outputs.version }}"
+
+          echo "installed=${installed}"
+          echo "output=${output}"
+
+          test "${installed}" = "2.100.0"
+          test "${output}" = "2.100.0"
+          supabase --help >/dev/null
+
   alpine-old-node-rejected:
     name: alpine old node rejected
     runs-on: ubuntu-latest
