@@ -1,0 +1,111 @@
+name: benchmark-local-stacks
+
+# Compares how long a fresh CI runner takes to get a usable local Supabase
+# (API answering requests) with the legacy Docker stack and the experimental
+# stack, on Docker and on the native runtime.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bench:
+    name: ${{ matrix.stack }} / ${{ matrix.os }} / run ${{ matrix.attempt }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        stack: [legacy, experimental-docker, experimental-native]
+        attempt: [1, 2, 3, 4, 5]
+        include:
+          - { os: macos-latest, stack: experimental-native, attempt: 1 }
+          - { os: macos-latest, stack: experimental-native, attempt: 2 }
+          - { os: macos-latest, stack: experimental-native, attempt: 3 }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Supabase's legacy ports fall inside Linux's ephemeral port range.
+      - if: runner.os == 'Linux'
+        run: sudo sysctl -w net.ipv4.ip_local_reserved_ports=54320-54329
+
+      - uses: supabase/setup-cli@v3.2.0
+        with:
+          version: ^3
+
+      - name: Benchmark
+        env:
+          STACK: ${{ matrix.stack }}
+        run: |
+          now() { python3 -c 'import time; print(int(time.time() * 1000))'; }
+
+          mkdir bench && cd bench
+          if [[ "$STACK" == legacy ]]; then
+            supabase init
+          else
+            SUPABASE_EXPERIMENTAL_STACK=1 supabase init
+          fi
+
+          start_ms=$(now)
+          case "$STACK" in
+            legacy) supabase start ;;
+            experimental-docker) supabase start --runtime docker > start.json ;;
+            experimental-native) supabase start --runtime native > start.json ;;
+          esac
+          started_ms=$(now)
+
+          if [[ "$STACK" == legacy ]]; then
+            env_vars=$(supabase status -o env)
+          else
+            env_vars=$(supabase status --env)
+          fi
+          set -a
+          eval "$env_vars"
+          set +a
+
+          # Lazy services wake on the first request, so wait until the API
+          # answers like a test suite would need it to.
+          deadline=$(( $(now) + 300000 ))
+          until curl -fsS -o /dev/null "$API_URL/rest/v1/" -H "apikey: $ANON_KEY" &&
+                curl -fsS -o /dev/null "$API_URL/auth/v1/health" -H "apikey: $ANON_KEY"; do
+            (( $(now) < deadline )) || { echo "API not ready after 5 minutes"; exit 1; }
+            sleep 0.2
+          done
+          ready_ms=$(now)
+
+          start_s=$(python3 -c "print(round(($started_ms - $start_ms) / 1000, 1))")
+          ready_s=$(python3 -c "print(round(($ready_ms - $start_ms) / 1000, 1))")
+          echo "start: ${start_s}s, API ready: ${ready_s}s"
+          echo "| ${{ matrix.stack }} | ${{ matrix.os }} | ${start_s}s | ${ready_s}s |" >> "$GITHUB_STEP_SUMMARY"
+          jq -n --arg stack "$STACK" --arg os "${{ matrix.os }}" \
+            --argjson start "$start_s" --argjson ready "$ready_s" \
+            '{stack: $stack, os: $os, start: $start, ready: $ready}' > "$GITHUB_WORKSPACE/timing.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: timing-${{ matrix.stack }}-${{ matrix.os }}-${{ matrix.attempt }}
+          path: timing.json
+
+  summary:
+    needs: bench
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: timing-*
+          merge-multiple: false
+      - name: Summarize medians
+        run: |
+          jq -s -r '
+            def median: sort | if length % 2 == 1 then .[length / 2 | floor]
+              else (.[length / 2 - 1] + .[length / 2]) / 2 end;
+            group_by([.stack, .os]) | .[] |
+            "| \(.[0].stack) | \(.[0].os) | \(length) | \(map(.start) | median)s | \(map(.ready) | median)s | \(map(.ready) | min)s–\(map(.ready) | max)s |"
+          ' timing-*/timing.json > rows.md
+          {
+            echo "| Stack | Runner | Runs | Median \`supabase start\` | Median until API ready | API ready range |"
+            echo "| --- | --- | --- | --- | --- | --- |"
+            cat rows.md
+          } | tee -a "$GITHUB_STEP_SUMMARY"
