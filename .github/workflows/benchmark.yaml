@@ -2,7 +2,8 @@ name: benchmark-local-stacks
 
 # Compares how long a fresh CI runner takes to get a usable local Supabase
 # (API answering requests) with the legacy Docker stack and the experimental
-# stack, on Docker and on the native runtime, with and without a warm cache.
+# stack, on Docker and on the native runtime. Every run starts cold: nothing is
+# cached between runs.
 #
 # Experimental variants start from stack-project/, which commits its
 # supabase.lock like a real CI setup would.
@@ -11,64 +12,20 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Fills this run's caches: native service archives, and Docker images.
-  warm:
-    name: warm ${{ matrix.runtime }} / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      matrix:
-        include:
-          - { os: ubuntu-latest, runtime: docker }
-          - { os: ubuntu-latest, runtime: native }
-          - { os: macos-latest, runtime: native }
-    defaults:
-      run:
-        shell: bash
-        working-directory: stack-project
-    steps:
-      - uses: actions/checkout@v6
-      - uses: supabase/setup-cli@v3.2.0
-        with:
-          version: ^3
-      - run: supabase start --runtime ${{ matrix.runtime }} > /dev/null
-      - if: matrix.runtime == 'native'
-        run: du -sh ~/.supabase/cache/stack
-      - if: matrix.runtime == 'docker'
-        run: |
-          docker image ls --digests
-          mapfile -t refs < <(docker image ls --digests --format '{{if ne .Digest "<none>"}}{{.Repository}}@{{.Digest}}{{else}}{{.Repository}}:{{.Tag}}{{end}}')
-          docker save -o "$RUNNER_TEMP/images.tar" "${refs[@]}"
-          du -sh "$RUNNER_TEMP/images.tar"
-      - if: matrix.runtime == 'native'
-        uses: actions/cache/save@v4
-        with:
-          path: ~/.supabase/cache/stack
-          key: stack-native-${{ runner.os }}-${{ hashFiles('stack-project/supabase/supabase.lock') }}-${{ github.run_id }}
-      - if: matrix.runtime == 'docker'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/images.tar
-          key: stack-docker-${{ runner.os }}-${{ hashFiles('stack-project/supabase/supabase.lock') }}-${{ github.run_id }}
-
   bench:
     name: ${{ matrix.variant }} / ${{ matrix.os }} / run ${{ matrix.attempt }}
-    needs: warm
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        variant: [legacy, docker-cold, docker-cached, native-cold, native-cached]
+        variant: [legacy, docker, native]
         attempt: [1, 2, 3, 4, 5]
         include:
-          - { os: macos-latest, variant: native-cold, attempt: 1 }
-          - { os: macos-latest, variant: native-cold, attempt: 2 }
-          - { os: macos-latest, variant: native-cold, attempt: 3 }
-          - { os: macos-latest, variant: native-cached, attempt: 1 }
-          - { os: macos-latest, variant: native-cached, attempt: 2 }
-          - { os: macos-latest, variant: native-cached, attempt: 3 }
+          - { os: macos-latest, variant: native, attempt: 1 }
+          - { os: macos-latest, variant: native, attempt: 2 }
+          - { os: macos-latest, variant: native, attempt: 3 }
     defaults:
       run:
         shell: bash
@@ -83,40 +40,12 @@ jobs:
         with:
           version: ^3
 
-      - name: Mark cache restore start
-        run: echo "RESTORE_START_MS=$(python3 -c 'import time; print(int(time.time() * 1000))')" >> "$GITHUB_ENV"
-
-      - if: matrix.variant == 'native-cached'
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.supabase/cache/stack
-          key: stack-native-${{ runner.os }}-${{ hashFiles('stack-project/supabase/supabase.lock') }}-${{ github.run_id }}
-          fail-on-cache-miss: true
-
-      - if: matrix.variant == 'docker-cached'
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/images.tar
-          key: stack-docker-${{ runner.os }}-${{ hashFiles('stack-project/supabase/supabase.lock') }}-${{ github.run_id }}
-          fail-on-cache-miss: true
-
-      - if: matrix.variant == 'docker-cached'
-        run: |
-          docker load -i "$RUNNER_TEMP/images.tar"
-          docker image ls --digests
-
       - name: Benchmark
         env:
           VARIANT: ${{ matrix.variant }}
         run: |
           now() { python3 -c 'import time; print(int(time.time() * 1000))'; }
           secs() { python3 -c "print(round($1 / 1000, 1))"; }
-
-          start_ms=$(now)
-          restore_ms=0
-          if [[ "$VARIANT" == *-cached ]]; then
-            restore_ms=$(( start_ms - RESTORE_START_MS ))
-          fi
 
           if [[ "$VARIANT" == legacy ]]; then
             mkdir legacy-project && cd legacy-project
@@ -125,10 +54,8 @@ jobs:
             supabase start
           else
             cd stack-project
-            case "$VARIANT" in
-              docker-*) supabase start --runtime docker > start.json ;;
-              native-*) supabase start --runtime native > start.json ;;
-            esac
+            start_ms=$(now)
+            supabase start --runtime "$VARIANT" > start.json
           fi
           started_ms=$(now)
 
@@ -151,15 +78,12 @@ jobs:
           done
           ready_ms=$(now)
 
-          restore_s=$(secs "$restore_ms")
           start_s=$(secs "$(( started_ms - start_ms ))")
           ready_s=$(secs "$(( ready_ms - start_ms ))")
-          total_s=$(secs "$(( restore_ms + ready_ms - start_ms ))")
-          echo "restore: ${restore_s}s, start: ${start_s}s, API ready: ${ready_s}s, total: ${total_s}s"
+          echo "start: ${start_s}s, API ready: ${ready_s}s"
           jq -n --arg variant "$VARIANT" --arg os "${{ matrix.os }}" \
-            --argjson restore "$restore_s" --argjson start "$start_s" \
-            --argjson ready "$ready_s" --argjson total "$total_s" \
-            '{variant: $variant, os: $os, restore: $restore, start: $start, ready: $ready, total: $total}' \
+            --argjson start "$start_s" --argjson ready "$ready_s" \
+            '{variant: $variant, os: $os, start: $start, ready: $ready}' \
             > "$GITHUB_WORKSPACE/timing.json"
 
       - uses: actions/upload-artifact@v4
@@ -181,10 +105,10 @@ jobs:
             def median: sort | if length % 2 == 1 then .[length / 2 | floor]
               else (.[length / 2 - 1] + .[length / 2]) / 2 end;
             sort_by(.os, .variant) | group_by([.os, .variant]) | .[] |
-            "| \(.[0].variant) | \(.[0].os) | \(length) | \(map(.restore) | median)s | \(map(.start) | median)s | \(map(.ready) | median)s | **\(map(.total) | median)s** | \(map(.total) | min)s–\(map(.total) | max)s |"
+            "| \(.[0].variant) | \(.[0].os) | \(length) | \(map(.start) | median)s | **\(map(.ready) | median)s** | \(map(.ready) | min)s–\(map(.ready) | max)s |"
           ' timing-*/timing.json > rows.md
           {
-            echo "| Variant | Runner | Runs | Cache restore | \`supabase start\` | Start until API ready | Total | Total range |"
-            echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+            echo "| Variant | Runner | Runs | \`supabase start\` | Start until API ready | Range |"
+            echo "| --- | --- | --- | --- | --- | --- |"
             cat rows.md
           } | tee -a "$GITHUB_STEP_SUMMARY"
